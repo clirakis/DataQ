@@ -283,7 +283,16 @@ class DI2008:
 
         it is 8000 for a single channel, 800 for multiple. 
         """
-        SR = 800.0*Sec/self.__Decimation/len(self.slist)
+        # Dividing by the length of the list is wrong. It only
+        # applies to number of analog channels (multiplexing the ADC)
+        #
+        AnalogChannelCount = 0
+        for val in self.slist:
+            channel = val & 0x0f
+            if (channel < 8):
+                AnalogChannelCount = AnalogChannelCount+1
+
+        SR = 800.0*Sec/self.__Decimation/AnalogChannelCount
         logging.info('Sample  = ' + str(Sec) + ' Seconds')
         self.ScanRate(SR)
         

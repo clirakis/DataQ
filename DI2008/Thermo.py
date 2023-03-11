@@ -17,7 +17,7 @@ def main():
 
     DATAQ = DI2008(tslist)         # open class, pass in slist parameters.
     # set a data rate of 1 per 60 seconds
-    DATAQ.SampleRate(1.0)
+    DATAQ.SampleRate(0.5)
     
     log   = MyLogger("TC")
     log.LogData(['DATIME','TC0','TC1','TC2','TC3','TC4','TC5','TC6','TC7'])
