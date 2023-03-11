@@ -7,48 +7,33 @@ Modified    BY    Reason
 11-Mar-23   CBL   Thermocoulple only 
 
 """
-from DI2008 import DI2008
+from DI2008   import DI2008
+from Logger import MyLogger
 import time
 
 def main():
     print ('Program starts')
-    DATAQ = DI2008()
-    
-    print("")
-    print("Ready to acquire...")
-    print ("")
-    print("Press <g> to go, <s> to stop, <r> resets counter channel, and <q> to quit:")
-    
-    # This is the slist position pointer. Ranges from 0 (first position)
-    # to len(slist)
-    slist_pointer = 0
-    # This is the constructed output string
-    output_string = ""
-    count = 0
-    
-    while True:
-        data = input('command?  ')
-        res = data.upper()
-        # If key 'SPACE' start scanning
-        if (res == 'G'):
-            DATAQ.Start();
-            while (count < 10):
-                DATAQ.Do()
-                count = count + 1
-                time.sleep(0.1)
-            DATAQ.Stop()
-            
-        elif (res == 'I'):
-            DATAQ.Info()
+    tslist = [0x1700,0x1701,0x1702,0x1703,0x1704,0x1705,0x1706, 0x1707]
 
-        elif (res == 'Q'):
-            DATAQ.Stop()
-            break
-        # If key 'r' reset counter 
-        elif (res == 'R'):
-            DATAQ.ResetCounter()
-        elif (res == 'T'):
-            DATAQ.TestDIO()
+    DATAQ = DI2008(tslist)         # open class, pass in slist parameters.
+    # set a data rate of 1 per 60 seconds
+    DATAQ.SampleRate(1.0)
+    
+    log   = MyLogger("TC")
+    log.LogData(['DATIME','TC0','TC1','TC2','TC3','TC4','TC5','TC6','TC7'])
+    print(" Log thermocouple data.")
+    
+    count = 0
+    DATAQ.Start();
+    while (count < 10):
+        n,strtime, x = DATAQ.Do()
+        if (n>0):
+            count = count + 1
+            #print(count, ' ', strtime, ' values: ', x)
+            log.LogDataTime(strtime,x)
+        time.sleep(0.1)
+    DATAQ.Stop()
+            
 
 if __name__ == '__main__':
     main()

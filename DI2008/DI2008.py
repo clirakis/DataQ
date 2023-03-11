@@ -35,6 +35,7 @@ import serial.tools.list_ports
 import time
 import logging
 from   datetime import datetime
+import numpy as np
 
 """
 Change slist tuple to vary analog channel configuration.
@@ -76,15 +77,18 @@ slist Tuple example interpretation (from protocol)
 
     Form ours for all 7 channels as T input Thermocouples
 """
-slist = [0x1700,0x1701,0x1702,0x1703,0x1704,0x1705,0x1706, 0x1707]
 
 """
 Define analog_ranges tuple to contain an ordered list of analog measurement
 ranges supported by the DI-2008. This tuple begins with gain code
 0 (+/- 500 mV) and ends gain code 0xD (+/- 1 V) and is padded with 0 values
 as place holders for undefined codes (see protocol.)
+
+4 bits of information in {11:8} of the SLIST word.
+If it is greater than 8 in the volt range 
 """
-analog_ranges = [.5, 0.25, 0.1, .05, .025, .01, 0, 0, 50 ,25, 10, 5, 2.5, 1, 0, 0]
+analog_ranges = [ .5, 0.25, 0.1, .05, .025, .01, 0, 0,
+                  50,   25,  10,   5,  2.5,   1, 0, 0]
 
 
 """
@@ -102,26 +106,26 @@ See protocol, these are fixed.
 tc_m = [0.023956,0.018311,0.021515,0.023987,0.022888,0.02774,0.02774,0.009155]
 tc_b = [1035,400,495,586,550,859,859,100]
 
-"""
-Define a list of analog voltage and rate ranges to apply in slist order.
-Value 0 is appended as a placeholder for enabled TC and dig-in channels. 
-This list is populated in the config_scn_lst() routine based upon 
-slist contents.
-"""
-range_table = list(())
 
 class DI2008:
-    def __init__(self):
-        
+    def __init__(self, input_slist):
+        # make all these variables private
         # initially no errors. 
-        self.error         = False
+        self.__error         = False
         # Define flag to indicate if acquiring is active 
-        self.acquiring     = False
-        self.slist_pointer = 0
-        self.output_string = ""   # initial string is null.
-        self.Decimation    = 1
-        self.Verbose       = True
+        self.__acquiring     = False
+        self.__Decimation    = 1
+        self.__Verbose       = True
+        self.__slist_pointer = 0      # this may ride over multiple calls.
         
+        """
+        Define a list of analog voltage and rate ranges to apply in slist
+        order. Value 0 is appended as a placeholder for enabled TC and
+        dig-in channels. This list is populated in the config_scn_lst()
+        routine based upon slist contents. 
+        """
+        self.__range_table = list(())
+
         # setup logging to file. Filename is based on date/time
         now = datetime.now()
         fname = now.strftime('%Y%m%d_%H%M%S.log')
@@ -134,10 +138,17 @@ class DI2008:
 
         # Open the serial method
         if (self.discovery()):
-            self.Setup()
+            # if successful, setup the device. 
+            self.Setup(input_slist)
         else:
             self.error = True
 
+        # create a return vector the size of input_slist
+        self.__x = np.zeros(len(input_slist))
+
+    def SetVerbose(self, TF):
+        self.__Verbose = TF
+        
     def discovery(self):
         """
         Discover DATAQ Instruments devices and models.
@@ -183,13 +194,13 @@ class DI2008:
         Sends a passed command string after appending <cr>
         @param command - ASCII command to send. 
         """
-        if (self.Verbose):
+        if (self.__Verbose):
             print('send_cmd: ', command)
             
         s = ""
         self.ser.write((command+'\r').encode())
         time.sleep(.1)
-        if not(self.acquiring):
+        if not(self.__acquiring):
             # Echo commands if not acquiring
             while True:
                 # wait for something to be available in the serial port
@@ -207,63 +218,46 @@ class DI2008:
                         except:
                             continue
                 # if the data is non-null then print out the result. 
-                if (s != "") and (self.Verbose):
+                if (s != "") and (self.__Verbose):
                     print ('send_cmd result: ', s)
                     return s
                     break
 
-    def Read(self):
-        """
-        Read any waiting bytes, assuming character values
-        back and report to user.
-        Not sure this method makes sense. 
-        """
-        s = ""
-        while True:
-            # wait for something to be available in the serial port
-            if(self.ser.inWaiting() > 0):
-                while True:
-                    try:
-                        rl = self.ser.readline()
-                        # Put the string into something we
-                        # can understand. 
-                        s = rl.decode()
-                        s = s.strip('\n')
-                        s = s.strip('\r')
-                        s = s.strip(chr(0))
-                        break
-                    except:
-                        continue
-                    # if the data is non-null then print out the result. 
-                    if s != "":
-                        print ('read result: ', s)
-                        break
-        return s
-
-    def config_scn_lst(self):
+    def config_scn_lst(self, slist):
         """
         Configure the instrment's scan list based on the values
-        in slist. 
+        in slist.
+        @param slist - list of hex codes to tell the DI2008 how to scan
         """
+        # keep a copy of the input
+        self.slist = slist
+        
         # Scan list position must start with 0 and increment sequentially
         position = 0 
         for item in slist:
-            self.send_cmd("slist "+ str(position ) + " " + str(item))
+            """
+            command looks like: slist <scan list position> <setup>
+            """
+            self.send_cmd("slist "+ str(position) + " " + str(item))
             position += 1
             
-            # Update the Range table - 
+            # Update the Range table -
             if (item & 0xf < 8) and (item & 0x1000 == 0):
+                # Mode == 0 (bit 12 or 0x1000) voltage in
+                # channel<8, AIN
                 # This is a voltage channel.
-                range_table.append(analog_ranges[item >> 8])
+                self.__range_table.append(analog_ranges[item >> 8])
 
             elif (item & 0xf < 8) and (item & 0x1000 != 0):
+                # Mode is 1, thermocouple in
+                # channel<8 AIN
                 # This is a TC channel. Append 0 as a placeholder
-                range_table.append(0)
+                self.__range_table.append(0)
 
             elif item & 0xf == 8:
                 # This is a dig in channel. No measurement range support. 
                 # Append 0 as a placeholder
-                range_table.append(0) 
+                self.__range_table.append(0) 
 
             elif item & 0xf == 9:
                 """
@@ -271,35 +265,43 @@ class DI2008:
                 Rate ranges begin with 1, so subtract 1 to 
                 maintain zero-based index in the rate_ranges tuple
                 """
-                range_table.append(rate_ranges[(item >> 8)-1]) 
+                self.__range_table.append(rate_ranges[(item >> 8)-1]) 
 
             else:
                 """
                 This is a count channel. No measurement range support. 
                 Append 0 as a placeholder
                 """
-                range_table.append(0)
+                self.__range_table.append(0)
 
-    def SampleRate(self, Hz):
+    def SampleRate(self, Sec):
         """
         Allow the user to specify the sample rate in Hz and
         figure out the scan rate based on number channels and
-        decimation rate. 
-        """
-        SR = 800.0/(self.Hz * self.Decimation)
+        decimation rate.
+        @param Sec - seconds between samples
 
+        it is 8000 for a single channel, 800 for multiple. 
+        """
+        SR = 800.0*Sec/self.__Decimation/len(self.slist)
+        logging.info('Sample  = ' + str(Sec) + ' Seconds')
+        self.ScanRate(SR)
+        
     def ScanRate(self,ScanRate):
         """
         Setup the overall sample rate based on decimation and srate values.
         The equation for sample rate is
-        Sample Rate (Hz) = 800/(Decimation * Scan Rate)
+        Sample Rate (Hz) = 8000/(Decimation * Scan Rate)
         @param ScanRate   {4:2232}
 
         Note that this is the rate that the device steps through all channels.
         The actual data rate is divided by the number of channels. 
         """
         toSend = 'srate ' + str(ScanRate)
-        self.send_cmd(toSend)  # scanning rate 
+        self.send_cmd(toSend)  # scanning rate
+        logging.info('Scan Rate: ' + str(ScanRate))
+        SR = 800.0/(ScanRate + self.__Decimation)
+        logging.info('Sample Rate: ' + str(SR) + ' Hz')
         
     def Filter(self, channel, val):
         """
@@ -319,6 +321,7 @@ class DI2008:
         else:
             toSend = 'filter ' + str(channel) + ' ' + str(val)
         self.send_cmd(toSend)
+        logging.info('Filter: ' + toSend)
 
     def MovingAverage(self, value):
         """
@@ -334,6 +337,7 @@ class DI2008:
             value=64
         toSend = 'ffl ' + str(value)
         self.send_cmd(toSend)
+        logging.info('Moving Average: ' + str(value))
 
         
     def SetDecimation(self, value):
@@ -345,17 +349,18 @@ class DI2008:
             value = 1
         if (value>32767):
             value = 32767
-        self.Decimation = value
+        self.__Decimation = value
         toSend = 'dec ' + str(value)
         self.send_cmd(toSend)
+        logging.info('Decimation: ' + str(value))
 
-    def Setup(self):
+    def Setup(self, input_slist):
         # Stop in case Device was left running
         self.Stop()
         # Keep the packet size small for responsiveness
         self.send_cmd("ps 0")
         # Configure the instrument's scan list
-        self.config_scn_lst()
+        self.config_scn_lst(input_slist)
         self.Filter(8,1)        # set all channels to current value, 
         self.SetDecimation(20)  # filter for 20 samples
         self.ScanRate(4)        # set scan rate to 40 
@@ -366,8 +371,7 @@ class DI2008:
         This command does not echo and once issued, no subsequent command
         echos. 
         """
-        print('START')
-        self.acquiring = True
+        self.__acquiring = True
         self.send_cmd("start")
 
     def Stop(self):
@@ -376,10 +380,8 @@ class DI2008:
         After this point, echos continue. 
         """
         self.send_cmd("stop")
-        self.acquiring = False
+        self.__acquiring = False
         time.sleep(1)
-        print ("")
-        print ("Stopped")
         self.ser.flushInput()
 
     def ResetCounter(self):
@@ -416,84 +418,100 @@ class DI2008:
 
     def DIO_In(self):
         """
-        Get the input from the digital inputs.
+        Immediate read of the digital inputs.
         read all inputs. Can specify value for read in.
         """
+        self.error = False
         instr = self.send_cmd('din')
         # need to separate out the command string from the value
         # has a space in it.
         values = instr.split(" ")
         return int(values[1])
     
+    def ScaleDataInput(self, position, bytes):
+        """
+        Based on the input data and position in slist, scale to
+        the appropriate value
+        @param position - position in slist to decode information on scaling
+        @bytes - 2 byte (16 bit) input value
+
+        returns:
+           value from read
+           error if any exists
+        """
+        self.error = False
+        # The four LSBs of slist determine measurement function
+        function = self.slist[position] & 0xf
+        mode_bit = self.slist[position] & 0x1000
+        
+        if (function < 8) and (not(mode_bit)):
+            # Working with a Voltage input channel. Scale accordingly.
+            result = self.__range_table[position] * int.from_bytes(bytes,byteorder='little', signed=True) / 32768
+
+        elif (function < 8) and (mode_bit):
+            """
+            Working with a TC channel.
+            Convert to temperature if no errors.
+            First, test for TC error conditions.
+            """
+            result = int.from_bytes(bytes, byteorder='little', signed=True)
+            
+            if result == 32767:
+                self.error = True
+            elif result == -32768:
+                self.error = True
+            else:
+                self.error = False
+                # Get here if no errors, so isolate TC type
+                tc_type = self.slist[position] & 0x0700
+                # Move TC type into 3 LSBs to form an index we'll
+                # use to select m & b scaling constants
+                tc_type = tc_type >> 8
+                result = tc_m[tc_type] * result + tc_b[tc_type]
+
+        elif function == 8:
+            # Working with the Digital input channel 
+            result = (int.from_bytes(bytes,byteorder='big', signed=False)) & (0x007f)
+
+            
+        elif function == 9:
+            # Working with the Rate input channel
+            result = (int.from_bytes(bytes,byteorder='little', signed=True) +
+                      32768) / 65535 * (self.__range_table[position])
+            
+        else:
+            # Working with the Counter input channel
+            result = (int.from_bytes(bytes,byteorder='little', signed=True)) + 32768
+        return result, self.error
+        
     def Do(self):
         """
-        Get some data
+        Get some data, return true when we have all of it.
         """
-        print(' DO ')
-        print('nbytes: ', self.ser.inWaiting())
- 
-        while (self.ser.inWaiting() > (2 * len(slist))):
-            for i in range(len(slist)):
-                # The four LSBs of slist determine measurement function
-                function = slist[self.slist_pointer] & 0xf
-                mode_bit = slist[self.slist_pointer] & 0x1000
+        now = datetime.now()
+        strtime = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+        """
+        If the number of bytes available is greater than the length of the
+        2 times the values in slist process them. Loop!
+        """
+        rn = 0
+        while (self.ser.inWaiting() >= (2 * len(self.slist))):
+            now = datetime.now()
+            for i in range(len(self.slist)):
                 # Always two bytes per sample...read them
                 bytes = self.ser.read(2)
-                
-                if (function < 8) and (not(mode_bit)):
-                    # Working with a Voltage input channel. Scale accordingly.
-                    result = range_table[self.slist_pointer] * int.from_bytes(bytes,byteorder='little', signed=True) / 32768
-                    self.output_string = self.output_string + "{: 3.3f}, ".format(result)
-                elif (function < 8) and (mode_bit):
-                    """
-                    Working with a TC channel.
-                    Convert to temperature if no errors.
-                    First, test for TC error conditions.
-                    """
-                    result = int.from_bytes(bytes,byteorder='little', signed=True)
-                    if result == 32767:
-                        self.output_string = self.output_string + "cjc error, "
-                        
-                    elif result == -32768:
-                        self.output_string = self.output_string + "open, "
-                        
-                    else:
-                        # Get here if no errors, so isolate TC type
-                        tc_type = slist[self.slist_pointer] & 0x0700
-                        # Move TC type into 3 LSBs to form an index we'll use to select m & b scaling constants
-                        tc_type = tc_type >> 8
-                        result = tc_m[tc_type] * result + tc_b[tc_type]
-                        self.output_string = self.output_string + "{: 3.3f}, ".format(result)
+                x,err = self.ScaleDataInput(self.__slist_pointer, bytes)
+                if (err):
+                    x = np.NAN
+                self.__x[i] = x
+                self.__slist_pointer = self.__slist_pointer+1
+                rn = self.__slist_pointer
 
-                elif function == 8:
-                    # Working with the Digital input channel 
-                    result = (int.from_bytes(bytes,byteorder='big', signed=False)) & (0x007f)
-                    self.output_string = self.output_string + "{: 3d}, ".format(result)
-
-                elif function == 9:
-                    # Working with the Rate input channel
-                    result = (int.from_bytes(bytes,byteorder='little', signed=True) + 32768) / 65535 * (range_table[self.slist_pointer])
-                    self.output_string = self.output_string + "{: 3.1f}, ".format(result)
-
-                else:
-                    # Working with the Counter input channel
-                    result = (int.from_bytes(bytes,byteorder='little', signed=True)) + 32768
-                    self.output_string = self.output_string + "{: 1d}, ".format(result)
-
-                # Get the next position in slist
-                self.slist_pointer += 1
-
-            print(' slist_pointer:', self.slist_pointer)
-            print(' output = ', self.output_string)
-            
-            if (self.slist_pointer + 1) > (len(slist)):
-                # End of a pass through slist items...output, reset, continue
-                print(self.output_string.rstrip(", ") + "             ", end="\r") 
-                self.output_string = ""
-                self.slist_pointer = 0
-        time.sleep(1)
-        print('DO done.')
-        
+            if (self.__slist_pointer + 1) > (len(self.slist)):
+                self.__slist_pointer = 0
+        return rn, strtime, self.__x
+    
     def TestDIO(self):
         """
         Setup and test the DIO stream. 
