@@ -117,7 +117,8 @@ class DI2008:
         self.__Decimation    = 1
         self.__Verbose       = True
         self.__slist_pointer = 0      # this may ride over multiple calls.
-        
+        self.__SampleRate    = 1      # one per second
+        self.__TotalSamples  = 10
         """
         Define a list of analog voltage and rate ranges to apply in slist
         order. Value 0 is appended as a placeholder for enabled TC and
@@ -141,7 +142,7 @@ class DI2008:
             # if successful, setup the device. 
             self.Setup(input_slist)
         else:
-            self.error = True
+            self.__error = True
 
         # create a return vector the size of input_slist
         self.__x = np.zeros(len(input_slist))
@@ -149,6 +150,12 @@ class DI2008:
     def SetVerbose(self, TF):
         self.__Verbose = TF
         
+    def Error(self):
+        return self.__error
+
+    def NSamples(self):
+        return self.__TotalSamples
+    
     def discovery(self):
         """
         Discover DATAQ Instruments devices and models.
@@ -181,12 +188,12 @@ class DI2008:
             # initial baudrate
             self.ser.baudrate = '115200'
             self.ser.open()
-            self.error = False
+            self.__error = False
             return (True)
         else:
             # Get here if no DATAQ Instruments devices are detected
             print("Please connect a DATAQ Instruments device")
-            self.error = True
+            self.__error = True
             return (False)
 
     def send_cmd(self, command):
@@ -291,10 +298,17 @@ class DI2008:
             channel = val & 0x0f
             if (channel < 8):
                 AnalogChannelCount = AnalogChannelCount+1
-
+        self.__SampleRate = Sec
         SR = 800.0*Sec/self.__Decimation/AnalogChannelCount
         logging.info('Sample  = ' + str(Sec) + ' Seconds')
         self.ScanRate(SR)
+
+    def TotalSamplesTime(self, DeltaT):
+        """
+        Set the total number of samples based on the SampleRate
+        """
+        self.__TotalSamples  = DeltaT/self.__SampleRate
+
         
     def ScanRate(self,ScanRate):
         """
@@ -311,6 +325,7 @@ class DI2008:
         logging.info('Scan Rate: ' + str(ScanRate))
         SR = 800.0/(ScanRate + self.__Decimation)
         logging.info('Sample Rate: ' + str(SR) + ' Hz')
+        # Need to come back here and reset SampleRate
         
     def Filter(self, channel, val):
         """
@@ -430,7 +445,7 @@ class DI2008:
         Immediate read of the digital inputs.
         read all inputs. Can specify value for read in.
         """
-        self.error = False
+        self.__error = False
         instr = self.send_cmd('din')
         # need to separate out the command string from the value
         # has a space in it.
@@ -448,7 +463,7 @@ class DI2008:
            value from read
            error if any exists
         """
-        self.error = False
+        self.__error = False
         # The four LSBs of slist determine measurement function
         function = self.slist[position] & 0xf
         mode_bit = self.slist[position] & 0x1000
@@ -466,11 +481,11 @@ class DI2008:
             result = int.from_bytes(bytes, byteorder='little', signed=True)
             
             if result == 32767:
-                self.error = True
+                self.__error = True
             elif result == -32768:
-                self.error = True
+                self.__error = True
             else:
-                self.error = False
+                self.__error = False
                 # Get here if no errors, so isolate TC type
                 tc_type = self.slist[position] & 0x0700
                 # Move TC type into 3 LSBs to form an index we'll
@@ -491,7 +506,7 @@ class DI2008:
         else:
             # Working with the Counter input channel
             result = (int.from_bytes(bytes,byteorder='little', signed=True)) + 32768
-        return result, self.error
+        return result, self.__error
         
     def Do(self):
         """

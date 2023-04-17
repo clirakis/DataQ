@@ -25,8 +25,12 @@ class MyLogger:
         @param values - an array defining the columns of data
         """
         toLog = ''
+        count = 0
         for col in values:
-            toLog = toLog + ',' + str(col)
+            toLog = toLog + str(col)
+            count = count + 1
+            if(count<len(values)):
+                toLog = toLog + ','
         self.fd.write(toLog + '\n')
         
     def LogDataTime(self, strtime, values):

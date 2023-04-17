@@ -16,8 +16,9 @@ def main():
     tslist = [0x1700,0x1701,0x1702,0x1703,0x1704,0x1705,0x1706, 0x1707]
 
     DATAQ = DI2008(tslist)         # open class, pass in slist parameters.
-    # set a data rate of 1 per 60 seconds
-    DATAQ.SampleRate(0.5)
+    # set a data rate of 1 per 15 seconds
+    DATAQ.SampleRate(15)
+    DATAQ.TotalSamplesTime(3600) # one hour
     
     log   = MyLogger("TC")
     log.LogData(['DATIME','TC0','TC1','TC2','TC3','TC4','TC5','TC6','TC7'])
@@ -25,7 +26,7 @@ def main():
     
     count = 0
     DATAQ.Start();
-    while (count < 10):
+    while (count < DATAQ.NSamples()):
         n,strtime, x = DATAQ.Do()
         if (n>0):
             count = count + 1
